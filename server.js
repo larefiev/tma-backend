@@ -4,8 +4,15 @@ const { TonClient, WalletContractV4, internal, Cell } = require('@ton/ton');
 const { mnemonicToPrivateKey } = require('@ton/crypto');
 
 const app = express();
+
+// Настройка CORS с явной поддержкой preflight для Safari/Telegram WebApp
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.options('*', cors());
 app.use(express.json());
-app.use(cors());
 
 const BOT_TOKEN = '8926794376:AAEsqPjnTtX13uLSueKhGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
@@ -118,7 +125,12 @@ async function payFragmentInvoice(tx) {
   return { seqno, tonPaid: (Number(requiredNano) / 1e9).toFixed(3) };
 }
 
-// 3. Создание инвойса Stars для депозита
+// 3. Health check (проверка работы сервера)
+app.get('/', (req, res) => {
+  res.send('Server is running');
+});
+
+// 4. Создание инвойса Stars для депозита
 app.post('/api/create-stars-invoice', async (req, res) => {
   try {
     const { userId, starsAmount } = req.body;
@@ -153,7 +165,7 @@ app.post('/api/create-stars-invoice', async (req, res) => {
   }
 });
 
-// 4. Активация промокода
+// 5. Активация промокода
 app.post('/api/activate-promo', (req, res) => {
   try {
     const { userId, promoCode } = req.body;
@@ -176,7 +188,7 @@ app.post('/api/activate-promo', (req, res) => {
     }
 
     user.balance += bonusAmount;
-    user.totalDeposited += bonusAmount; // Учитывается в правилах вейджера
+    user.totalDeposited += bonusAmount;
     user.usedPromos.push(code);
 
     res.json({
@@ -191,12 +203,12 @@ app.post('/api/activate-promo', (req, res) => {
   }
 });
 
-// 5. Получение данных пользователя
+// 6. Получение баланса и профиля
 app.get('/api/user/:id', (req, res) => {
   res.json(getUser(req.params.id));
 });
 
-// 6. Запись отыгрыша
+// 7. Запись отыгрыша
 app.post('/api/record-wager', (req, res) => {
   const { userId, amount } = req.body;
   const wagerVal = parseInt(amount) || 0;
@@ -208,7 +220,7 @@ app.post('/api/record-wager', (req, res) => {
   res.status(400).json({ error: 'Неверные параметры' });
 });
 
-// 7. Автоматический вывод Stars через Fragment (от 50 ⭐)
+// 8. Автоматический вывод Stars через Fragment (от 50 ⭐)
 app.post('/api/withdraw', async (req, res) => {
   try {
     const { userId, amount, username, totalWageredClient } = req.body;
@@ -220,7 +232,7 @@ app.post('/api/withdraw', async (req, res) => {
 
     if (!username) {
       return res.status(400).json({ 
-        error: 'Для отправки звёзд необходим публичный @username в Telegram! Установите его в профиле Telegram.' 
+        error: 'Для отправки звёзд необходим публичный @username в Telegram! Установите его в настройках Telegram.' 
       });
     }
 
@@ -294,7 +306,7 @@ app.post('/api/withdraw', async (req, res) => {
   }
 });
 
-// 8. Polling депозитов Stars
+// 9. Polling депозитов Stars
 let lastUpdateId = 0;
 async function pollTelegramUpdates() {
   try {
