@@ -6,7 +6,7 @@ app.use(express.json());
 app.use(cors());
 
 // Токен бота строго из BotFather
-const BOT_TOKEN = '8926794376:AAEsqPjnTtX13uLSueKhGb8Qz7UMophdGnk';
+const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKHGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 const usersDb = {};
