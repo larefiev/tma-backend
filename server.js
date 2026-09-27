@@ -14,7 +14,7 @@ app.use(express.json());\
 app.use(cors());\
 \
 // \uc0\u1058 \u1086 \u1082 \u1077 \u1085  \u1073 \u1086 \u1090 \u1072  \u1086 \u1090  @BotFather\
-const BOT_TOKEN = '8926794376:AAEsqPjnTIXI3uLSueKkIGb8Qz7UMophdGnk';\
+const BOT_TOKEN = '8926794376:AAEsqPjnTIXI3uLSueKkIGb8Qz7UMophdGnk';
 const bot = new TelegramBot(BOT_TOKEN, \{ polling: true \});\
 \
 // \uc0\u1041 \u1072 \u1079 \u1072  \u1076 \u1072 \u1085 \u1085 \u1099 \u1093  \u1074  \u1087 \u1072 \u1084 \u1103 \u1090 \u1080  (\u1076 \u1083 \u1103  \u1089 \u1086 \u1093 \u1088 \u1072 \u1085 \u1077 \u1085 \u1080 \u1103  \u1073 \u1072 \u1083 \u1072 \u1085 \u1089 \u1072  \u1080  \u1086 \u1090 \u1099 \u1075 \u1088 \u1099 \u1096 \u1072 )\
