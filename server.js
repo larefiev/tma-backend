@@ -18,7 +18,7 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKHGb8Qz7UMophdGnk';
+const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKhGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ADMIN_CHAT_ID = '944873428';
 
