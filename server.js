@@ -15,7 +15,8 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKhGb8Qz7UMophdGnk';
+// ⚠️ УКАЖИТЕ СВЕЖИЙ ТОКЕН ОТ @BotFather ЗДЕСЬ:
+const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKHGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ADMIN_CHAT_ID = '944873428';
 
@@ -157,8 +158,8 @@ app.post('/api/withdraw', async (req, res) => {
     const rawUser = username.trim().replace(/^@+/, '');
     const fragmentDirectUrl = `https://fragment.com/stars?recipient=${rawUser}&quantity=${toPayoutStars}`;
 
-    // Отправляем заявку администратору с удобной кнопкой
-    await fetch(`${TELEGRAM_API}/sendMessage`, {
+    // Отправляем заявку администратору
+    const adminMsgRes = await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -177,7 +178,12 @@ app.post('/api/withdraw', async (req, res) => {
           ]
         }
       })
-    }).catch((e) => console.error('Ошибка отправки админу:', e));
+    });
+
+    const adminMsgData = await adminMsgRes.json();
+    if (!adminMsgData.ok) {
+      console.error('Ошибка отправки админу:', adminMsgData);
+    }
 
     // Уведомление игроку
     await fetch(`${TELEGRAM_API}/sendMessage`, {
@@ -248,7 +254,7 @@ async function pollTelegramUpdates() {
       }
     }
   } catch (e) {
-    console.error('Polling error:', e.message);
+    // Тихо игнорируем сетевые сбои поллинга
   } finally {
     setTimeout(pollTelegramUpdates, 1000);
   }
