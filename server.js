@@ -7,7 +7,7 @@ app.use(express.json());
 app.use(cors());
 
 // Токен бота с валидными кавычками
-const BOT_TOKEN = '8926794376:AAEsqPjnTIXI3uLSueKkIGb8Qz7UMophdGnk';
+const BOT_TOKEN = '8926794376:AAEsqPjnTrx13uLSueKh0b8Qz7UMophdGnk';
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 const usersDb = {};
