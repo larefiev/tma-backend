@@ -7,7 +7,6 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Токен бота
 const BOT_TOKEN = '8926794376:AAEsqPjnTtX13uLSueKhGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ADMIN_CHAT_ID = '944873428';
@@ -27,12 +26,12 @@ function getUser(id) {
   return usersDb[strId];
 }
 
-// 1. Создание заказа на покупку Stars через внутренний API Fragment
+// 1. Создание инвойса на покупку Stars через API Fragment
 async function createFragmentStarsOrder(username, starsCount) {
   const cookie = process.env.FRAGMENT_COOKIE || 'stel_token=50e875dfc79236503aabd60f38ff94fe50e875c450e8706c5890a7214cfe752224666';
   const cleanUser = username.replace('@', '').trim();
 
-  // 1 этап: Инициализация заявки
+  // Инициализация заказа
   const initRes = await fetch('https://fragment.com/api?hash=', {
     method: 'POST',
     headers: {
@@ -50,10 +49,10 @@ async function createFragmentStarsOrder(username, starsCount) {
 
   const initData = await initRes.json();
   if (!initData.ok || !initData.req_id) {
-    throw new Error(initData.error || 'Ошибка инициализации ордера на Fragment (проверьте stel_token)');
+    throw new Error(initData.error || 'Ошибка создания заказа Fragment. Проверьте stel_token');
   }
 
-  // 2 этап: Получение смарт-контракта и транзакции для оплаты
+  // Получение параметров смарт-контракта
   const linkRes = await fetch('https://fragment.com/api?hash=', {
     method: 'POST',
     headers: {
@@ -70,13 +69,13 @@ async function createFragmentStarsOrder(username, starsCount) {
 
   const linkData = await linkRes.json();
   if (!linkData.ok || !linkData.transaction) {
-    throw new Error(linkData.error || 'Не удалось сформировать транзакцию оплаты Stars');
+    throw new Error(linkData.error || 'Не удалось получить данные транзакции Fragment');
   }
 
   return linkData.transaction;
 }
 
-// 2. Исполнение транзакции оплаты смарт-контракта горячим TON-кошельком
+// 2. Исполнение транзакции смарт-контракта горячим кошельком TON
 async function payFragmentInvoice(tx) {
   const mnemonic = process.env.TON_MNEMONIC;
   if (!mnemonic) {
@@ -90,14 +89,13 @@ async function payFragmentInvoice(tx) {
   const balance = await contract.getBalance();
   const requiredNano = BigInt(tx.value);
 
-  // Проверяем баланс на оплату контракта + 0.02 TON на сетевой газ
+  // Проверка баланса: сумма транзакции + 0.02 TON на комиссию сети
   if (balance < requiredNano + 20000000n) {
-    throw new Error(`Недостаточно TON на казначейском кошельке бота. Баланс: ${(Number(balance) / 1e9).toFixed(3)} TON`);
+    throw new Error(`Недостаточно TON на казначейском кошельке. Баланс: ${(Number(balance) / 1e9).toFixed(3)} TON`);
   }
 
   const seqno = await contract.getSeqno();
 
-  // Транслируем транзакцию в смарт-контракт Fragment
   await contract.sendTransfer({
     seqno: seqno,
     secretKey: keyPair.secretKey,
@@ -166,7 +164,7 @@ app.post('/api/record-wager', (req, res) => {
   res.status(400).json({ error: 'Неверные параметры' });
 });
 
-// 6. АВТОМАТИЧЕСКИЙ ВЫВОД STARS ЧЕРЕЗ FRAGMENT НА АККАУНТ ИГРОКА (ОТ 50 ⭐)
+// 6. АВТОМАТИЧЕСКИЙ ВЫВОД STARS ЧЕРЕЗ FRAGMENT (ОТ 50 ⭐)
 app.post('/api/withdraw', async (req, res) => {
   try {
     const { userId, amount, username, totalWageredClient } = req.body;
@@ -198,14 +196,14 @@ app.post('/api/withdraw', async (req, res) => {
       });
     }
 
-    // Расчет суммы (Fragment принимает покупки с шагом или от 50 штук)
+    // Расчет суммы к отправке (минимальный лот Fragment — 50 Stars)
     const fee = Math.floor(withdrawAmount * 0.15);
     let toPayoutStars = withdrawAmount - fee;
     if (toPayoutStars < 50) {
-      toPayoutStars = 50; 
+      toPayoutStars = 50;
     }
 
-    // Списываем звёзды перед отправкой транзакции
+    // Списываем звёзды перед отправкой
     user.balance -= withdrawAmount;
 
     console.log(`Покупка ${toPayoutStars} Stars через Fragment для @${username}...`);
@@ -214,14 +212,14 @@ app.post('/api/withdraw', async (req, res) => {
     try {
       const fragmentTx = await createFragmentStarsOrder(username, toPayoutStars);
       txInfo = await payFragmentInvoice(fragmentTx);
-      console.log(`Транзакция отправлена в блокчейн TON. Seqno: ${txInfo.seqno}`);
+      console.log(`Транзакция отправлена в сеть TON. Seqno: ${txInfo.seqno}`);
     } catch (orderErr) {
-      user.balance += withdrawAmount; // Откат списания при сбое
+      user.balance += withdrawAmount; // Откат списания при ошибке
       console.error('Ошибка вывода через Fragment:', orderErr.message);
       return res.status(500).json({ error: orderErr.message });
     }
 
-    // Сообщение пользователю в боте
+    // Уведомление игрока в чат
     await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -245,7 +243,7 @@ app.post('/api/withdraw', async (req, res) => {
         text: `⚡ <b>Автовывод Stars исполнен!</b>\n\n` +
               `👤 Игрок: @${username} (ID: <code>${userId}</code>)\n` +
               `⭐ Начислено: <b>${toPayoutStars} Stars</b>\n` +
-              `💎 Оплачено с казначейства: ~${txInfo.tonPaid} TON`
+              `💎 Оплачено с горячего кошелька: ~${txInfo.tonPaid} TON`
       })
     }).catch(() => {});
 
