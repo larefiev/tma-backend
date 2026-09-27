@@ -35,13 +35,13 @@ function getUser(id) {
   return usersDb[strId];
 }
 
-// 1. Создание инвойса на покупку Stars через API Fragment
+// 1. Создание инвойса на покупку Stars через API Fragment с полным жизненным циклом
 async function createFragmentStarsOrder(username, starsCount) {
   const cookie = process.env.FRAGMENT_COOKIE || 'stel_token=50e875dfc79236503aabd60f38ff94fe50e875c450e8706c5890a7214cfe752224666';
   const cleanUser = username.replace('@', '').trim();
   const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
-  // Получаем динамический hash со страницы stars
+  // 1. Получаем актуальный динамический хэш страницы
   let apiHash = '';
   try {
     const pageRes = await fetch('https://fragment.com/stars', {
@@ -56,60 +56,65 @@ async function createFragmentStarsOrder(username, starsCount) {
   const apiUrl = `https://fragment.com/api?hash=${apiHash}`;
   console.log(`[FRAGMENT] URL: ${apiUrl}`);
 
-  // ШАГ 1: Инициализация с payment_method: 'ton'
-  const initParams = new URLSearchParams({
-    method: 'initBuyStarsRequest',
-    recipient: cleanUser,
-    quantity: String(starsCount),
-    payment_method: 'ton'
+  const commonHeaders = {
+    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    'Cookie': cookie,
+    'User-Agent': userAgent,
+    'X-Requested-With': 'XMLHttpRequest',
+    'Referer': 'https://fragment.com/stars'
+  };
+
+  // 2. ОБЯЗАТЕЛЬНЫЙ ЭТАП: Поиск и фиксация получателя в состоянии Fragment
+  const stateRes = await fetch(apiUrl, {
+    method: 'POST',
+    headers: commonHeaders,
+    body: new URLSearchParams({
+      method: 'updateStarsBuyState',
+      query: cleanUser,
+      quantity: String(starsCount)
+    })
   });
 
+  const stateText = await stateRes.text();
+  console.log('[FRAGMENT updateStarsBuyState]:', stateText);
+
+  // 3. Инициализация запроса на покупку
   const initRes = await fetch(apiUrl, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      'Cookie': cookie,
-      'User-Agent': userAgent,
-      'X-Requested-With': 'XMLHttpRequest',
-      'Referer': 'https://fragment.com/stars'
-    },
-    body: initParams
+    headers: commonHeaders,
+    body: new URLSearchParams({
+      method: 'initBuyStarsRequest',
+      recipient: cleanUser,
+      quantity: String(starsCount)
+    })
   });
 
   const initText = await initRes.text();
-  console.log('[FRAGMENT init response]:', initText);
+  console.log('[FRAGMENT initBuyStarsRequest]:', initText);
 
   let initData;
   try {
     initData = JSON.parse(initText);
   } catch (err) {
-    throw new Error('Fragment вернул некорректный ответ: ' + initText.substring(0, 100));
+    throw new Error('Fragment вернул некорректный ответ: ' + initText.substring(0, 80));
   }
 
   if (!initData.ok || !initData.req_id) {
     throw new Error(initData.error || 'Ошибка Fragment: ' + initText);
   }
 
-  // ШАГ 2: Получение ссылки и данных транзакции
-  const linkParams = new URLSearchParams({
-    method: 'getBuyStarsLink',
-    req_id: initData.req_id
-  });
-
+  // 4. Получение транзакции для смарт-контракта
   const linkRes = await fetch(apiUrl, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      'Cookie': cookie,
-      'User-Agent': userAgent,
-      'X-Requested-With': 'XMLHttpRequest',
-      'Referer': 'https://fragment.com/stars'
-    },
-    body: linkParams
+    headers: commonHeaders,
+    body: new URLSearchParams({
+      method: 'getBuyStarsLink',
+      req_id: initData.req_id
+    })
   });
 
   const linkData = await linkRes.json();
-  console.log('[FRAGMENT link response]:', linkData);
+  console.log('[FRAGMENT getBuyStarsLink]:', linkData);
 
   if (!linkData.ok || !linkData.transaction) {
     throw new Error(linkData.error || 'Не удалось получить данные транзакции Fragment');
