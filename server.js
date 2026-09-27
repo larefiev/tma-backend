@@ -32,19 +32,10 @@ const usersDb = {};
 function getUser(id) {
   const strId = String(id);
   if (!usersDb[strId]) {
-    usersDb[strId] = { balance: 0, totalDeposited: 0, totalWagered: 0, usedPromos: [] };
-  }
-  if (!usersDb[strId].usedPromos) {
-    usersDb[strId].usedPromos = [];
+    usersDb[strId] = { balance: 0, totalDeposited: 0, totalWagered: 0 };
   }
   return usersDb[strId];
 }
-
-// Список доступных промокодов
-const PROMO_CODES = {
-  'BONUS100': 100,
-  'START100': 100
-};
 
 // 1. Создание инвойса на покупку Stars через API Fragment
 async function createFragmentStarsOrder(username, starsCount) {
@@ -129,12 +120,43 @@ async function payFragmentInvoice(tx) {
   return { seqno, tonPaid: (Number(requiredNano) / 1e9).toFixed(3) };
 }
 
-// 3. Health check (проверка работы сервера)
+// 3. Health check
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
 
-// 4. Создание инвойса Stars для депозита
+// 4. ПАНЕЛЬ МОДЕРАТОРА: Выдача звезд админу
+app.post('/api/admin/give-stars', (req, res) => {
+  try {
+    const { adminId, targetUserId, amount } = req.body;
+
+    // Доступ строго по вашему Telegram ID
+    if (String(adminId) !== ADMIN_CHAT_ID) {
+      return res.status(403).json({ error: 'Доступ запрещен. Вы не администратор.' });
+    }
+
+    const stars = parseInt(amount);
+    if (isNaN(stars) || stars <= 0) {
+      return res.status(400).json({ error: 'Укажите корректную сумму' });
+    }
+
+    const target = getUser(targetUserId || adminId);
+    target.balance += stars;
+
+    console.log(`[ADMIN] Выдано ${stars} Stars пользователю ${targetUserId || adminId}`);
+
+    res.json({
+      success: true,
+      addedStars: stars,
+      newBalance: target.balance
+    });
+  } catch (err) {
+    console.error('Ошибка админ-панели:', err);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// 5. Создание инвойса Stars для депозита
 app.post('/api/create-stars-invoice', async (req, res) => {
   try {
     const { userId, starsAmount } = req.body;
@@ -166,44 +188,6 @@ app.post('/api/create-stars-invoice', async (req, res) => {
     res.json({ invoiceLink: tgData.result });
   } catch (err) {
     res.status(500).json({ error: err.message });
-  }
-});
-
-// 5. Активация промокода
-app.post('/api/activate-promo', (req, res) => {
-  try {
-    const { userId, promoCode } = req.body;
-
-    if (!userId || !promoCode) {
-      return res.status(400).json({ error: 'Укажите промокод' });
-    }
-
-    const code = promoCode.trim().toUpperCase();
-    const bonusAmount = PROMO_CODES[code];
-
-    if (!bonusAmount) {
-      return res.status(400).json({ error: 'Неверный или недействительный промокод' });
-    }
-
-    const user = getUser(userId);
-
-    if (user.usedPromos.includes(code)) {
-      return res.status(400).json({ error: 'Вы уже активировали этот промокод!' });
-    }
-
-    user.balance += bonusAmount;
-    user.totalDeposited += bonusAmount;
-    user.usedPromos.push(code);
-
-    res.json({
-      success: true,
-      bonusAmount: bonusAmount,
-      newBalance: user.balance,
-      totalDeposited: user.totalDeposited
-    });
-  } catch (err) {
-    console.error('Ошибка промокода:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
