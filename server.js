@@ -17,7 +17,7 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKhGb8Qz7UMophdGnk';
+const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKHGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ADMIN_CHAT_ID = '944873428';
 
@@ -35,13 +35,16 @@ function getUser(id) {
   return usersDb[strId];
 }
 
-// 1. Создание инвойса на покупку Stars через API Fragment с полным жизненным циклом
+// 1. Создание инвойса на покупку Stars через API Fragment
 async function createFragmentStarsOrder(username, starsCount) {
   const cookie = process.env.FRAGMENT_COOKIE || 'stel_token=50e875dfc79236503aabd60f38ff94fe50e875c450e8706c5890a7214cfe752224666';
-  const cleanUser = username.replace('@', '').trim();
+  
+  // Для поиска Fragment обязательно нужен '@', а для recipient — без '@'
+  const rawUser = username.trim().replace(/^@+/, '');
+  const searchUser = `@${rawUser}`;
+
   const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
-  // 1. Получаем актуальный динамический хэш страницы
   let apiHash = '';
   try {
     const pageRes = await fetch('https://fragment.com/stars', {
@@ -54,7 +57,7 @@ async function createFragmentStarsOrder(username, starsCount) {
   } catch(e) {}
 
   const apiUrl = `https://fragment.com/api?hash=${apiHash}`;
-  console.log(`[FRAGMENT] URL: ${apiUrl}`);
+  console.log(`[FRAGMENT] URL: ${apiUrl} | Поиск пользователя: ${searchUser}`);
 
   const commonHeaders = {
     'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
@@ -64,13 +67,13 @@ async function createFragmentStarsOrder(username, starsCount) {
     'Referer': 'https://fragment.com/stars'
   };
 
-  // 2. ОБЯЗАТЕЛЬНЫЙ ЭТАП: Поиск и фиксация получателя в состоянии Fragment
+  // Шаг 1: Поиск пользователя с префиксом @
   const stateRes = await fetch(apiUrl, {
     method: 'POST',
     headers: commonHeaders,
     body: new URLSearchParams({
       method: 'updateStarsBuyState',
-      query: cleanUser,
+      query: searchUser,
       quantity: String(starsCount)
     })
   });
@@ -78,13 +81,27 @@ async function createFragmentStarsOrder(username, starsCount) {
   const stateText = await stateRes.text();
   console.log('[FRAGMENT updateStarsBuyState]:', stateText);
 
-  // 3. Инициализация запроса на покупку
+  let stateData;
+  try {
+    stateData = JSON.parse(stateText);
+  } catch (err) {
+    throw new Error('Fragment вернул некорректный ответ при поиске');
+  }
+
+  if (!stateData.ok) {
+    throw new Error(stateData.error || 'Пользователь не найден на Fragment');
+  }
+
+  // Получаем точный recipient из результата поиска
+  const recipient = (stateData.recipient && stateData.recipient.username) ? stateData.recipient.username : rawUser;
+
+  // Шаг 2: Инициализация заказа
   const initRes = await fetch(apiUrl, {
     method: 'POST',
     headers: commonHeaders,
     body: new URLSearchParams({
       method: 'initBuyStarsRequest',
-      recipient: cleanUser,
+      recipient: recipient,
       quantity: String(starsCount)
     })
   });
@@ -100,10 +117,10 @@ async function createFragmentStarsOrder(username, starsCount) {
   }
 
   if (!initData.ok || !initData.req_id) {
-    throw new Error(initData.error || 'Ошибка Fragment: ' + initText);
+    throw new Error(initData.error || 'Ошибка инициализации Fragment');
   }
 
-  // 4. Получение транзакции для смарт-контракта
+  // Шаг 3: Получение транзакции для смарт-контракта
   const linkRes = await fetch(apiUrl, {
     method: 'POST',
     headers: commonHeaders,
