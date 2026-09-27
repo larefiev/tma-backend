@@ -15,8 +15,7 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// ПРАВИЛЬНЫЙ ТОКЕН БОТА
-const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKHGb8Qz7UMophdGnk';
+const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKhGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ADMIN_CHAT_ID = '944873428';
 
@@ -114,7 +113,7 @@ app.post('/api/record-wager', (req, res) => {
   res.status(400).json({ error: 'Неверные параметры' });
 });
 
-// Вывод Stars: списание с баланса и генерация кнопки на Fragment администратору
+// Ручной вывод Stars: списание с баланса + отправка ссылки админу в Telegram
 app.post('/api/withdraw', async (req, res) => {
   try {
     const { userId, amount, username, totalWageredClient } = req.body;
@@ -152,12 +151,13 @@ app.post('/api/withdraw', async (req, res) => {
       toPayoutStars = 50;
     }
 
+    // Списываем баланс игрока
     user.balance -= withdrawAmount;
 
     const rawUser = username.trim().replace(/^@+/, '');
     const fragmentDirectUrl = `https://fragment.com/stars?recipient=${rawUser}&quantity=${toPayoutStars}`;
 
-    // Отправляем заявку администратору
+    // Отправляем заявку администратору с удобной кнопкой
     await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -168,7 +168,7 @@ app.post('/api/withdraw', async (req, res) => {
               `👤 Игрок: @${rawUser} (ID: <code>${userId}</code>)\n` +
               `⭐ Сумма к выплате: <b>${toPayoutStars} Stars</b>\n` +
               `💰 Списано с баланса: <b>${withdrawAmount} Stars</b>\n\n` +
-              `<i>Нажмите на кнопку ниже, чтобы отправить Stars через Fragment:</i>`,
+              `<i>Нажмите на кнопку ниже, чтобы купить Stars в 1 клик на Fragment:</i>`,
         reply_markup: {
           inline_keyboard: [
             [
