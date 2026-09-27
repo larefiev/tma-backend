@@ -4,7 +4,6 @@ const { mnemonicToPrivateKey } = require('@ton/crypto');
 
 const app = express();
 
-// Ручная настройка CORS: гарантирует пропуск запросов из Safari / WebKit на macOS
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -18,11 +17,10 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKHGb8Qz7UMophdGnk';
+const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKhGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ADMIN_CHAT_ID = '944873428';
 
-// Инициализация TON клиента (Mainnet)
 const tonClient = new TonClient({
   endpoint: 'https://toncenter.com/api/v2/jsonRPC'
 });
@@ -37,18 +35,36 @@ function getUser(id) {
   return usersDb[strId];
 }
 
-// 1. Создание инвойса на покупку Stars через API Fragment
+// Создание заказа через Fragment с динамическим хэшем
 async function createFragmentStarsOrder(username, starsCount) {
   const cookie = process.env.FRAGMENT_COOKIE || 'stel_token=50e875dfc79236503aabd60f38ff94fe50e875c450e8706c5890a7214cfe752224666';
   const cleanUser = username.replace('@', '').trim();
+  const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
-  const initRes = await fetch('https://fragment.com/api?hash=', {
+  const pageRes = await fetch('https://fragment.com/stars', {
+    headers: {
+      'Cookie': cookie,
+      'User-Agent': userAgent
+    }
+  });
+
+  const pageHtml = await pageRes.text();
+  const hashMatch = pageHtml.match(/Tgc\.initApi\s*\(\s*["']\/api\?hash=([^"']+)["']/i) 
+                 || pageHtml.match(/\/api\?hash=([a-f0-9]+)/i);
+
+  const apiHash = hashMatch ? hashMatch[1] : '';
+  const apiUrl = `https://fragment.com/api?hash=${apiHash}`;
+
+  console.log(`[FRAGMENT] Использован API hash: ${apiHash ? apiHash.substring(0, 8) + '...' : 'не найден'}`);
+
+  const initRes = await fetch(apiUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
       'Cookie': cookie,
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-      'X-Requested-With': 'XMLHttpRequest'
+      'User-Agent': userAgent,
+      'X-Requested-With': 'XMLHttpRequest',
+      'Referer': 'https://fragment.com/stars'
     },
     body: new URLSearchParams({
       method: 'initBuyStarsRequest',
@@ -59,16 +75,18 @@ async function createFragmentStarsOrder(username, starsCount) {
 
   const initData = await initRes.json();
   if (!initData.ok || !initData.req_id) {
-    throw new Error(initData.error || 'Ошибка создания заказа Fragment. Проверьте stel_token');
+    console.error('[FRAGMENT ERROR initBuyStarsRequest]:', initData);
+    throw new Error(initData.error || 'Ошибка инициализации заказа Fragment. Проверьте stel_token');
   }
 
-  const linkRes = await fetch('https://fragment.com/api?hash=', {
+  const linkRes = await fetch(apiUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
       'Cookie': cookie,
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-      'X-Requested-With': 'XMLHttpRequest'
+      'User-Agent': userAgent,
+      'X-Requested-With': 'XMLHttpRequest',
+      'Referer': 'https://fragment.com/stars'
     },
     body: new URLSearchParams({
       method: 'getBuyStarsLink',
@@ -78,13 +96,13 @@ async function createFragmentStarsOrder(username, starsCount) {
 
   const linkData = await linkRes.json();
   if (!linkData.ok || !linkData.transaction) {
+    console.error('[FRAGMENT ERROR getBuyStarsLink]:', linkData);
     throw new Error(linkData.error || 'Не удалось получить данные транзакции Fragment');
   }
 
   return linkData.transaction;
 }
 
-// 2. Исполнение транзакции смарт-контракта горячим кошельком TON
 async function payFragmentInvoice(tx) {
   const mnemonic = process.env.TON_MNEMONIC;
   if (!mnemonic) {
@@ -120,12 +138,11 @@ async function payFragmentInvoice(tx) {
   return { seqno, tonPaid: (Number(requiredNano) / 1e9).toFixed(3) };
 }
 
-// 3. Health check
 app.get('/', (req, res) => {
   res.send('Server is running');
 });
 
-// 4. Панель модератора: выдача звезд админу
+// Начисление админу
 app.post('/api/admin/give-stars', (req, res) => {
   try {
     const { adminId, targetUserId, amount } = req.body;
@@ -142,20 +159,17 @@ app.post('/api/admin/give-stars', (req, res) => {
     const target = getUser(targetUserId || adminId);
     target.balance += stars;
 
-    console.log(`[ADMIN] Выдано ${stars} Stars пользователю ${targetUserId || adminId}`);
-
     res.json({
       success: true,
       addedStars: stars,
       newBalance: target.balance
     });
   } catch (err) {
-    console.error('Ошибка админ-панели:', err);
     res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
-// 5. Создание инвойса Stars для депозита (ФИКС ДЛЯ STARS: provider_token: "")
+// Создание инвойса Stars (депозит)
 app.post('/api/create-stars-invoice', async (req, res) => {
   try {
     const { userId, starsAmount } = req.body;
@@ -174,7 +188,7 @@ app.post('/api/create-stars-invoice', async (req, res) => {
         title: 'Пополнение игрового баланса',
         description: `Пополнение баланса на ${amount} ⭐ Stars`,
         payload: payload,
-        provider_token: '', // ДЛЯ ЗВЁЗД ОБЯЗАТЕЛЬНА ПУСТАЯ СТРОКА
+        provider_token: '',
         currency: 'XTR',
         prices: [{ label: `${amount} Stars`, amount: amount }]
       })
@@ -182,23 +196,19 @@ app.post('/api/create-stars-invoice', async (req, res) => {
 
     const tgData = await tgRes.json();
     if (!tgData.ok) {
-      console.error('Telegram createInvoiceLink error:', tgData);
-      return res.status(500).json({ error: tgData.description || 'Не удалось сформировать ссылку оплаты' });
+      return res.status(500).json({ error: tgData.description || 'Не удалось сформировать инвойс' });
     }
 
     res.json({ invoiceLink: tgData.result });
   } catch (err) {
-    console.error('Ошибка создания инвойса:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// 6. Получение баланса и профиля
 app.get('/api/user/:id', (req, res) => {
   res.json(getUser(req.params.id));
 });
 
-// 7. Запись отыгрыша
 app.post('/api/record-wager', (req, res) => {
   const { userId, amount } = req.body;
   const wagerVal = parseInt(amount) || 0;
@@ -210,7 +220,7 @@ app.post('/api/record-wager', (req, res) => {
   res.status(400).json({ error: 'Неверные параметры' });
 });
 
-// 8. Автоматический вывод Stars через Fragment (от 50 ⭐)
+// Автовывод Stars через Fragment
 app.post('/api/withdraw', async (req, res) => {
   try {
     const { userId, amount, username, totalWageredClient } = req.body;
@@ -222,7 +232,7 @@ app.post('/api/withdraw', async (req, res) => {
 
     if (!username) {
       return res.status(400).json({ 
-        error: 'Для отправки звёзд необходим публичный @username в Telegram! Установите его в настройках Telegram.' 
+        error: 'Для отправки звёзд необходим публичный @username в Telegram! Установите его в профиле Telegram.' 
       });
     }
 
@@ -236,7 +246,7 @@ app.post('/api/withdraw', async (req, res) => {
       return res.status(400).json({ error: 'Недостаточно звёзд на балансе' });
     }
 
-    // Для администратора вейджер отключен для тестов
+    // Для администратора проверка вейджера пропускается
     if (String(userId) !== ADMIN_CHAT_ID && user.totalWagered < user.totalDeposited) {
       return res.status(400).json({ 
         error: `Вейджер не отыгран на 100%! Отыграно: ${user.totalWagered}/${user.totalDeposited} ⭐` 
@@ -297,7 +307,7 @@ app.post('/api/withdraw', async (req, res) => {
   }
 });
 
-// 9. Polling депозитов Stars
+// Polling депозитов Stars
 let lastUpdateId = 0;
 async function pollTelegramUpdates() {
   try {
