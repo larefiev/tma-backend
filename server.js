@@ -6,8 +6,11 @@ app.use(express.json());
 app.use(cors());
 
 // Токен бота
-const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKHGb8Qz7UMophdGnk';
+const BOT_TOKEN = '8926794376:AAEsqPjnTtX13uLSueKhGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
+// Укажите свой числовой ID чата/аккаунта Telegram для получения заявок
+const ADMIN_CHAT_ID = '944873428'; 
 
 const usersDb = {};
 
@@ -60,7 +63,58 @@ app.get('/api/user/:id', (req, res) => {
   res.json(getUser(req.params.id));
 });
 
-// 3. Автоматическое подтверждение платежей через Long Polling
+// 3. Обработка заявки на вывод Stars
+app.post('/api/withdraw', async (req, res) => {
+  try {
+    const { userId, amount, username } = req.body;
+    const withdrawAmount = parseInt(amount);
+
+    if (!userId || isNaN(withdrawAmount) || withdrawAmount < 10) {
+      return res.status(400).json({ error: 'Минимальная сумма вывода — 10 ⭐' });
+    }
+
+    const user = getUser(userId);
+
+    if (user.balance < withdrawAmount) {
+      return res.status(400).json({ error: 'Недостаточно звёзд на балансе' });
+    }
+
+    if (user.totalWagered < user.totalDeposited) {
+      return res.status(400).json({ error: 'Вейджер не отыгран на 100%' });
+    }
+
+    const fee = Math.floor(withdrawAmount * 0.15);
+    const toPayout = withdrawAmount - fee;
+
+    // Списываем баланс на сервере
+    user.balance -= withdrawAmount;
+
+    // Оповещение администратора (если задан ADMIN_CHAT_ID)
+    if (ADMIN_CHAT_ID) {
+      await fetch(`${TELEGRAM_API}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: ADMIN_CHAT_ID,
+          parse_mode: 'HTML',
+          text: `🚨 <b>Заявка на вывод Stars</b>\n\n` +
+                `👤 Игрок: @${username || 'не указан'} (ID: <code>${userId}</code>)\n` +
+                `⭐ Запрошено: <b>${withdrawAmount} Stars</b>\n` +
+                `📉 Комиссия (15%): <b>${fee} Stars</b>\n` +
+                `💰 К выплате: <b>${toPayout} Stars</b>\n\n` +
+                `<i>Баланс игрока успешно списан.</i>`
+        })
+      }).catch(err => console.error('Ошибка отправки сообщения админу:', err));
+    }
+
+    res.json({ success: true, newBalance: user.balance, toPayout });
+  } catch (err) {
+    console.error('Ошибка вывода:', err);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// 4. Автоматическое подтверждение платежей через Long Polling
 let lastUpdateId = 0;
 async function pollTelegramUpdates() {
   try {
@@ -71,7 +125,7 @@ async function pollTelegramUpdates() {
       for (const update of data.result) {
         lastUpdateId = update.update_id;
 
-        // Обязательное подтверждение перед списанием звёзд (чтобы не было таймаута)
+        // Подтверждение перед списанием
         if (update.pre_checkout_query) {
           const preQueryId = update.pre_checkout_query.id;
           await fetch(`${TELEGRAM_API}/answerPreCheckoutQuery`, {
@@ -85,7 +139,7 @@ async function pollTelegramUpdates() {
           console.log(`PreCheckout ${preQueryId} подтвержден.`);
         }
 
-        // Обработка успешного платежа и отправка сообщения в чат
+        // Зачисление успешной оплаты
         if (update.message && update.message.successful_payment) {
           const sp = update.message.successful_payment;
           const payload = JSON.parse(sp.invoice_payload);
@@ -120,7 +174,7 @@ async function pollTelegramUpdates() {
   }
 }
 
-// Запуск сервера и опросника платежей
+// Запуск сервера
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Сервер запущен на порту ${PORT}`);
