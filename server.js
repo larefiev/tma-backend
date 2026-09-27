@@ -17,7 +17,7 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKHGb8Qz7UMophdGnk';
+const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKhGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ADMIN_CHAT_ID = '944873428';
 
@@ -35,20 +35,39 @@ function getUser(id) {
   return usersDb[strId];
 }
 
-// 1. Создание инвойса на покупку Stars через API Fragment
+// 1. Создание инвойса на покупку Stars через API Fragment с полным набором браузерных заголовков
 async function createFragmentStarsOrder(username, starsCount) {
   const cookie = process.env.FRAGMENT_COOKIE || 'stel_token=50e875dfc79236503aabd60f38ff94fe50e875c450e8706c5890a7214cfe752224666';
   
-  // Для поиска Fragment обязательно нужен '@', а для recipient — без '@'
   const rawUser = username.trim().replace(/^@+/, '');
   const searchUser = `@${rawUser}`;
 
-  const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
+  const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36';
 
+  const commonHeaders = {
+    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    'Cookie': cookie,
+    'User-Agent': userAgent,
+    'Accept': 'application/json, text/javascript, */*; q=0.01',
+    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Origin': 'https://fragment.com',
+    'Referer': 'https://fragment.com/stars',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
+    'X-Requested-With': 'XMLHttpRequest'
+  };
+
+  // Получаем актуальный динамический хэш страницы
   let apiHash = '';
   try {
     const pageRes = await fetch('https://fragment.com/stars', {
-      headers: { 'Cookie': cookie, 'User-Agent': userAgent }
+      headers: {
+        'Cookie': cookie,
+        'User-Agent': userAgent,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
+      }
     });
     const pageHtml = await pageRes.text();
     const hashMatch = pageHtml.match(/Tgc\.initApi\s*\(\s*["']\/api\?hash=([^"']+)["']/i) 
@@ -59,15 +78,7 @@ async function createFragmentStarsOrder(username, starsCount) {
   const apiUrl = `https://fragment.com/api?hash=${apiHash}`;
   console.log(`[FRAGMENT] URL: ${apiUrl} | Поиск пользователя: ${searchUser}`);
 
-  const commonHeaders = {
-    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-    'Cookie': cookie,
-    'User-Agent': userAgent,
-    'X-Requested-With': 'XMLHttpRequest',
-    'Referer': 'https://fragment.com/stars'
-  };
-
-  // Шаг 1: Поиск пользователя с префиксом @
+  // Шаг 1: Поиск и валидация пользователя
   const stateRes = await fetch(apiUrl, {
     method: 'POST',
     headers: commonHeaders,
@@ -85,6 +96,9 @@ async function createFragmentStarsOrder(username, starsCount) {
   try {
     stateData = JSON.parse(stateText);
   } catch (err) {
+    if (stateText.includes('Access denied') || stateText.includes('Attention Required')) {
+      throw new Error('Access denied (Cloudflare). Обновите stel_token и stel_ssid в Variables Railway');
+    }
     throw new Error('Fragment вернул некорректный ответ при поиске');
   }
 
@@ -92,7 +106,6 @@ async function createFragmentStarsOrder(username, starsCount) {
     throw new Error(stateData.error || 'Пользователь не найден на Fragment');
   }
 
-  // Получаем точный recipient из результата поиска
   const recipient = (stateData.recipient && stateData.recipient.username) ? stateData.recipient.username : rawUser;
 
   // Шаг 2: Инициализация заказа
@@ -102,7 +115,8 @@ async function createFragmentStarsOrder(username, starsCount) {
     body: new URLSearchParams({
       method: 'initBuyStarsRequest',
       recipient: recipient,
-      quantity: String(starsCount)
+      quantity: String(starsCount),
+      payment_method: 'ton'
     })
   });
 
@@ -117,10 +131,10 @@ async function createFragmentStarsOrder(username, starsCount) {
   }
 
   if (!initData.ok || !initData.req_id) {
-    throw new Error(initData.error || 'Ошибка инициализации Fragment');
+    throw new Error(initData.error || 'Ошибка инициализации заказа Fragment');
   }
 
-  // Шаг 3: Получение транзакции для смарт-контракта
+  // Шаг 3: Получение транзакции для смарт-контракта TON
   const linkRes = await fetch(apiUrl, {
     method: 'POST',
     headers: commonHeaders,
