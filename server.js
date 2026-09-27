@@ -21,17 +21,25 @@ const usersDb = {};
 function getUser(id) {
   const strId = String(id);
   if (!usersDb[strId]) {
-    usersDb[strId] = { balance: 0, totalDeposited: 0, totalWagered: 0 };
+    usersDb[strId] = { balance: 0, totalDeposited: 0, totalWagered: 0, usedPromos: [] };
+  }
+  if (!usersDb[strId].usedPromos) {
+    usersDb[strId].usedPromos = [];
   }
   return usersDb[strId];
 }
+
+// Список доступных промокодов
+const PROMO_CODES = {
+  'BONUS100': 100,
+  'START100': 100
+};
 
 // 1. Создание инвойса на покупку Stars через API Fragment
 async function createFragmentStarsOrder(username, starsCount) {
   const cookie = process.env.FRAGMENT_COOKIE || 'stel_token=50e875dfc79236503aabd60f38ff94fe50e875c450e8706c5890a7214cfe752224666';
   const cleanUser = username.replace('@', '').trim();
 
-  // Инициализация заказа
   const initRes = await fetch('https://fragment.com/api?hash=', {
     method: 'POST',
     headers: {
@@ -52,7 +60,6 @@ async function createFragmentStarsOrder(username, starsCount) {
     throw new Error(initData.error || 'Ошибка создания заказа Fragment. Проверьте stel_token');
   }
 
-  // Получение параметров смарт-контракта
   const linkRes = await fetch('https://fragment.com/api?hash=', {
     method: 'POST',
     headers: {
@@ -89,7 +96,6 @@ async function payFragmentInvoice(tx) {
   const balance = await contract.getBalance();
   const requiredNano = BigInt(tx.value);
 
-  // Проверка баланса: сумма транзакции + 0.02 TON на комиссию сети
   if (balance < requiredNano + 20000000n) {
     throw new Error(`Недостаточно TON на казначейском кошельке. Баланс: ${(Number(balance) / 1e9).toFixed(3)} TON`);
   }
@@ -147,12 +153,50 @@ app.post('/api/create-stars-invoice', async (req, res) => {
   }
 });
 
-// 4. Получение баланса
+// 4. Активация промокода
+app.post('/api/activate-promo', (req, res) => {
+  try {
+    const { userId, promoCode } = req.body;
+
+    if (!userId || !promoCode) {
+      return res.status(400).json({ error: 'Укажите промокод' });
+    }
+
+    const code = promoCode.trim().toUpperCase();
+    const bonusAmount = PROMO_CODES[code];
+
+    if (!bonusAmount) {
+      return res.status(400).json({ error: 'Неверный или недействительный промокод' });
+    }
+
+    const user = getUser(userId);
+
+    if (user.usedPromos.includes(code)) {
+      return res.status(400).json({ error: 'Вы уже активировали этот промокод!' });
+    }
+
+    user.balance += bonusAmount;
+    user.totalDeposited += bonusAmount; // Учитывается в правилах вейджера
+    user.usedPromos.push(code);
+
+    res.json({
+      success: true,
+      bonusAmount: bonusAmount,
+      newBalance: user.balance,
+      totalDeposited: user.totalDeposited
+    });
+  } catch (err) {
+    console.error('Ошибка промокода:', err);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// 5. Получение данных пользователя
 app.get('/api/user/:id', (req, res) => {
   res.json(getUser(req.params.id));
 });
 
-// 5. Запись отыгрыша (вейджер)
+// 6. Запись отыгрыша
 app.post('/api/record-wager', (req, res) => {
   const { userId, amount } = req.body;
   const wagerVal = parseInt(amount) || 0;
@@ -164,7 +208,7 @@ app.post('/api/record-wager', (req, res) => {
   res.status(400).json({ error: 'Неверные параметры' });
 });
 
-// 6. АВТОМАТИЧЕСКИЙ ВЫВОД STARS ЧЕРЕЗ FRAGMENT (ОТ 50 ⭐)
+// 7. Автоматический вывод Stars через Fragment (от 50 ⭐)
 app.post('/api/withdraw', async (req, res) => {
   try {
     const { userId, amount, username, totalWageredClient } = req.body;
@@ -196,14 +240,12 @@ app.post('/api/withdraw', async (req, res) => {
       });
     }
 
-    // Расчет суммы к отправке (минимальный лот Fragment — 50 Stars)
     const fee = Math.floor(withdrawAmount * 0.15);
     let toPayoutStars = withdrawAmount - fee;
     if (toPayoutStars < 50) {
       toPayoutStars = 50;
     }
 
-    // Списываем звёзды перед отправкой
     user.balance -= withdrawAmount;
 
     console.log(`Покупка ${toPayoutStars} Stars через Fragment для @${username}...`);
@@ -214,12 +256,11 @@ app.post('/api/withdraw', async (req, res) => {
       txInfo = await payFragmentInvoice(fragmentTx);
       console.log(`Транзакция отправлена в сеть TON. Seqno: ${txInfo.seqno}`);
     } catch (orderErr) {
-      user.balance += withdrawAmount; // Откат списания при ошибке
+      user.balance += withdrawAmount;
       console.error('Ошибка вывода через Fragment:', orderErr.message);
       return res.status(500).json({ error: orderErr.message });
     }
 
-    // Уведомление игрока в чат
     await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -233,7 +274,6 @@ app.post('/api/withdraw', async (req, res) => {
       })
     }).catch(() => {});
 
-    // Уведомление администратора
     await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -254,7 +294,7 @@ app.post('/api/withdraw', async (req, res) => {
   }
 });
 
-// 7. Polling депозитов Stars
+// 8. Polling депозитов Stars
 let lastUpdateId = 0;
 async function pollTelegramUpdates() {
   try {
