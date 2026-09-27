@@ -35,27 +35,34 @@ function getUser(id) {
   return usersDb[strId];
 }
 
-// Создание заказа через Fragment с динамическим хэшем
+// 1. Создание инвойса на покупку Stars через API Fragment
 async function createFragmentStarsOrder(username, starsCount) {
   const cookie = process.env.FRAGMENT_COOKIE || 'stel_token=50e875dfc79236503aabd60f38ff94fe50e875c450e8706c5890a7214cfe752224666';
   const cleanUser = username.replace('@', '').trim();
   const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36';
 
-  const pageRes = await fetch('https://fragment.com/stars', {
-    headers: {
-      'Cookie': cookie,
-      'User-Agent': userAgent
-    }
-  });
+  // Получаем динамический hash со страницы stars
+  let apiHash = '';
+  try {
+    const pageRes = await fetch('https://fragment.com/stars', {
+      headers: { 'Cookie': cookie, 'User-Agent': userAgent }
+    });
+    const pageHtml = await pageRes.text();
+    const hashMatch = pageHtml.match(/Tgc\.initApi\s*\(\s*["']\/api\?hash=([^"']+)["']/i) 
+                   || pageHtml.match(/\/api\?hash=([a-f0-9]+)/i);
+    if (hashMatch) apiHash = hashMatch[1];
+  } catch(e) {}
 
-  const pageHtml = await pageRes.text();
-  const hashMatch = pageHtml.match(/Tgc\.initApi\s*\(\s*["']\/api\?hash=([^"']+)["']/i) 
-                 || pageHtml.match(/\/api\?hash=([a-f0-9]+)/i);
-
-  const apiHash = hashMatch ? hashMatch[1] : '';
   const apiUrl = `https://fragment.com/api?hash=${apiHash}`;
+  console.log(`[FRAGMENT] URL: ${apiUrl}`);
 
-  console.log(`[FRAGMENT] Использован API hash: ${apiHash ? apiHash.substring(0, 8) + '...' : 'не найден'}`);
+  // ШАГ 1: Инициализация с payment_method: 'ton'
+  const initParams = new URLSearchParams({
+    method: 'initBuyStarsRequest',
+    recipient: cleanUser,
+    quantity: String(starsCount),
+    payment_method: 'ton'
+  });
 
   const initRes = await fetch(apiUrl, {
     method: 'POST',
@@ -66,18 +73,28 @@ async function createFragmentStarsOrder(username, starsCount) {
       'X-Requested-With': 'XMLHttpRequest',
       'Referer': 'https://fragment.com/stars'
     },
-    body: new URLSearchParams({
-      method: 'initBuyStarsRequest',
-      recipient: cleanUser,
-      quantity: String(starsCount)
-    })
+    body: initParams
   });
 
-  const initData = await initRes.json();
-  if (!initData.ok || !initData.req_id) {
-    console.error('[FRAGMENT ERROR initBuyStarsRequest]:', initData);
-    throw new Error(initData.error || 'Ошибка инициализации заказа Fragment. Проверьте stel_token');
+  const initText = await initRes.text();
+  console.log('[FRAGMENT init response]:', initText);
+
+  let initData;
+  try {
+    initData = JSON.parse(initText);
+  } catch (err) {
+    throw new Error('Fragment вернул некорректный ответ: ' + initText.substring(0, 100));
   }
+
+  if (!initData.ok || !initData.req_id) {
+    throw new Error(initData.error || 'Ошибка Fragment: ' + initText);
+  }
+
+  // ШАГ 2: Получение ссылки и данных транзакции
+  const linkParams = new URLSearchParams({
+    method: 'getBuyStarsLink',
+    req_id: initData.req_id
+  });
 
   const linkRes = await fetch(apiUrl, {
     method: 'POST',
@@ -88,21 +105,20 @@ async function createFragmentStarsOrder(username, starsCount) {
       'X-Requested-With': 'XMLHttpRequest',
       'Referer': 'https://fragment.com/stars'
     },
-    body: new URLSearchParams({
-      method: 'getBuyStarsLink',
-      req_id: initData.req_id
-    })
+    body: linkParams
   });
 
   const linkData = await linkRes.json();
+  console.log('[FRAGMENT link response]:', linkData);
+
   if (!linkData.ok || !linkData.transaction) {
-    console.error('[FRAGMENT ERROR getBuyStarsLink]:', linkData);
     throw new Error(linkData.error || 'Не удалось получить данные транзакции Fragment');
   }
 
   return linkData.transaction;
 }
 
+// 2. Исполнение транзакции смарт-контракта горячим кошельком TON
 async function payFragmentInvoice(tx) {
   const mnemonic = process.env.TON_MNEMONIC;
   if (!mnemonic) {
@@ -169,7 +185,7 @@ app.post('/api/admin/give-stars', (req, res) => {
   }
 });
 
-// Создание инвойса Stars (депозит)
+// Создание инвойса Stars
 app.post('/api/create-stars-invoice', async (req, res) => {
   try {
     const { userId, starsAmount } = req.body;
@@ -220,7 +236,7 @@ app.post('/api/record-wager', (req, res) => {
   res.status(400).json({ error: 'Неверные параметры' });
 });
 
-// Автовывод Stars через Fragment
+// Вывод Stars через Fragment
 app.post('/api/withdraw', async (req, res) => {
   try {
     const { userId, amount, username, totalWageredClient } = req.body;
@@ -246,7 +262,6 @@ app.post('/api/withdraw', async (req, res) => {
       return res.status(400).json({ error: 'Недостаточно звёзд на балансе' });
     }
 
-    // Для администратора проверка вейджера пропускается
     if (String(userId) !== ADMIN_CHAT_ID && user.totalWagered < user.totalDeposited) {
       return res.status(400).json({ 
         error: `Вейджер не отыгран на 100%! Отыграно: ${user.totalWagered}/${user.totalDeposited} ⭐` 
