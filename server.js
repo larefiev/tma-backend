@@ -1,14 +1,13 @@
 const express = require('express');
 const cors = require('cors');
-const TelegramBot = require('node-telegram-bot-api');
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Точный токен бота из BotFather
+// Токен бота строго из BotFather
 const BOT_TOKEN = '8926794376:AAEsqPjnTtX13uLSueKhGb8Qz7UMophdGnk';
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 const usersDb = {};
 
@@ -20,7 +19,7 @@ function getUser(id) {
   return usersDb[strId];
 }
 
-// 1. Создание инвойса Stars
+// 1. Создание инвойса Stars через прямой вызов Bot API
 app.post('/api/create-stars-invoice', async (req, res) => {
   try {
     const { userId, starsAmount } = req.body;
@@ -32,21 +31,33 @@ app.post('/api/create-stars-invoice', async (req, res) => {
 
     const payload = JSON.stringify({ userId: String(userId), amount: amount, time: Date.now() });
 
-    // Прямой вызов Telegram Bot API для генерации ссылки Stars
-    const invoiceLink = await bot.createInvoiceLink(
-      'Пополнение Stars',
-      `Пополнение игрового баланса на ${amount} ⭐`,
-      payload,
-      '',      // Пустая строка: для XTR провайдер не нужен
-      'XTR',   // Валюта звезд
-      [{ label: `${amount} Stars`, amount: amount }]
-    );
+    // Прямой запрос к Telegram Bot API методом createInvoiceLink
+    const tgRes = await fetch(`${TELEGRAM_API}/createInvoiceLink`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Пополнение игрового баланса',
+        description: `Пополнение баланса на ${amount} ⭐ Stars`,
+        payload: payload,
+        currency: 'XTR',
+        prices: [{ label: `${amount} Stars`, amount: amount }]
+      })
+    });
 
-    console.log(`Инвойс успешно создан для пользователя ${userId}: ${invoiceLink}`);
-    res.json({ invoiceLink });
+    const tgData = await tgRes.json();
+    console.log('Ответ от Telegram Bot API:', tgData);
+
+    if (!tgData.ok) {
+      return res.status(500).json({ 
+        error: 'Telegram API Error', 
+        details: tgData.description 
+      });
+    }
+
+    res.json({ invoiceLink: tgData.result });
   } catch (err) {
-    console.error('Ошибка создания инвойса в Telegram:', err.response ? err.response.body : err.message);
-    res.status(500).json({ error: 'Не удалось создать инвойс' });
+    console.error('Ошибка сервера:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -55,41 +66,7 @@ app.get('/api/user/:id', (req, res) => {
   res.json(getUser(req.params.id));
 });
 
-// 3. Предварительная проверка оплаты
-bot.on('pre_checkout_query', async (query) => {
-  try {
-    await bot.answerPreCheckoutQuery(query.id, true);
-  } catch (e) {
-    console.error('Ошибка pre_checkout:', e);
-  }
-});
-
-// 4. Успешный платеж
-bot.on('successful_payment', async (msg) => {
-  try {
-    const payload = JSON.parse(msg.successful_payment.invoice_payload);
-    const userId = payload.userId;
-    const starsPaid = msg.successful_payment.total_amount;
-    const chatId = msg.chat.id;
-
-    const user = getUser(userId);
-    user.balance += starsPaid;
-    user.totalDeposited += starsPaid;
-
-    await bot.sendMessage(
-      chatId,
-      `🎉 <b>Успешное пополнение!</b>\n\n` +
-      `⭐ Зачислено: <b>+${starsPaid} Stars</b>\n` +
-      `💰 Текущий баланс: <b>${user.balance} Stars</b>\n\n` +
-      `<i>Удачной игры! 🚀</i>`,
-      { parse_mode: 'HTML' }
-    );
-  } catch (e) {
-    console.error('Ошибка обработки successful_payment:', e);
-  }
-});
-
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Сервер бота запущен на порту ${PORT}`);
+  console.log(`Сервер запущен на порту ${PORT}`);
 });
