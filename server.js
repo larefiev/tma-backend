@@ -18,7 +18,7 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKhGb8Qz7UMophdGnk';
+const BOT_TOKEN = '8926794376:AAEsqPjnTtXl3uLSueKHGb8Qz7UMophdGnk';
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ADMIN_CHAT_ID = '944873428';
 
@@ -125,12 +125,11 @@ app.get('/', (req, res) => {
   res.send('Server is running');
 });
 
-// 4. ПАНЕЛЬ МОДЕРАТОРА: Выдача звезд админу
+// 4. Панель модератора: выдача звезд админу
 app.post('/api/admin/give-stars', (req, res) => {
   try {
     const { adminId, targetUserId, amount } = req.body;
 
-    // Доступ строго по вашему Telegram ID
     if (String(adminId) !== ADMIN_CHAT_ID) {
       return res.status(403).json({ error: 'Доступ запрещен. Вы не администратор.' });
     }
@@ -156,7 +155,7 @@ app.post('/api/admin/give-stars', (req, res) => {
   }
 });
 
-// 5. Создание инвойса Stars для депозита
+// 5. Создание инвойса Stars для депозита (ФИКС ДЛЯ STARS: provider_token: "")
 app.post('/api/create-stars-invoice', async (req, res) => {
   try {
     const { userId, starsAmount } = req.body;
@@ -175,6 +174,7 @@ app.post('/api/create-stars-invoice', async (req, res) => {
         title: 'Пополнение игрового баланса',
         description: `Пополнение баланса на ${amount} ⭐ Stars`,
         payload: payload,
+        provider_token: '', // ДЛЯ ЗВЁЗД ОБЯЗАТЕЛЬНА ПУСТАЯ СТРОКА
         currency: 'XTR',
         prices: [{ label: `${amount} Stars`, amount: amount }]
       })
@@ -182,11 +182,13 @@ app.post('/api/create-stars-invoice', async (req, res) => {
 
     const tgData = await tgRes.json();
     if (!tgData.ok) {
-      return res.status(500).json({ error: tgData.description });
+      console.error('Telegram createInvoiceLink error:', tgData);
+      return res.status(500).json({ error: tgData.description || 'Не удалось сформировать ссылку оплаты' });
     }
 
     res.json({ invoiceLink: tgData.result });
   } catch (err) {
+    console.error('Ошибка создания инвойса:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -234,7 +236,8 @@ app.post('/api/withdraw', async (req, res) => {
       return res.status(400).json({ error: 'Недостаточно звёзд на балансе' });
     }
 
-    if (user.totalWagered < user.totalDeposited) {
+    // Для администратора вейджер отключен для тестов
+    if (String(userId) !== ADMIN_CHAT_ID && user.totalWagered < user.totalDeposited) {
       return res.status(400).json({ 
         error: `Вейджер не отыгран на 100%! Отыграно: ${user.totalWagered}/${user.totalDeposited} ⭐` 
       });
