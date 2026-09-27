@@ -6,8 +6,13 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "@ton/crypto": "^3.2.0",
+    "@ton/ton": "^13.11.1",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "node-telegram-bot-api": "^0.66.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
